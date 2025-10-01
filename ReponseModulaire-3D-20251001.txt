@@ -1,0 +1,686 @@
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                          FICHIER: Cargo.toml                             ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+[package]
+name = "logo-rust-bevy-3d"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.16.1"
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                          FICHIER: src/main.rs                            ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+use logo_rust_bevy_3d::run;
+
+fn main() {
+    run();
+}
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                          FICHIER: src/lib.rs                             ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+use bevy::prelude::*;
+
+pub mod config;
+pub mod materials;
+pub mod geometry;
+pub mod systems;
+
+use systems::setup::setup_system;
+
+pub fn run() {
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_systems(Startup, setup_system)
+        .run();
+}
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                        FICHIER: src/config.rs                            ║
+// ╚══════════════════════════════════════════════════════════════════════════╗
+
+/// Rayon du cercle principal
+pub const CIRCLE_RADIUS: f32 = 200.0;
+
+/// Épaisseur de l'anneau du cercle
+pub const CIRCLE_THICKNESS: f32 = 30.0;
+
+/// Qualité des cercles (segments)
+pub const CIRCLE_SEGMENTS: usize = 64;
+
+/// Nombre de triangles extérieurs
+pub const EXTERIOR_TRIANGLES_COUNT: usize = 36;
+
+/// Taille des petits triangles extérieurs
+pub const SMALL_TRIANGLE_SIDE: f32 = 25.0;
+
+/// Nombre de triangles intérieurs
+pub const INTERIOR_TRIANGLES_COUNT: usize = 5;
+
+/// Taille des grands triangles intérieurs
+pub const LARGE_TRIANGLE_SIDE: f32 = 80.0;
+
+/// Rayon des petits cercles
+pub const SMALL_CIRCLE_RADIUS: f32 = 15.0;
+
+/// Qualité des petits cercles
+pub const SMALL_CIRCLE_SEGMENTS: usize = 32;
+
+// === NOUVEAUX PARAMÈTRES 3D ===
+
+/// Épaisseur de tous les éléments en 3D (profondeur)
+pub const DEPTH: f32 = 10.0;
+
+/// Distance de la caméra
+pub const CAMERA_DISTANCE: f32 = 500.0;
+
+/// Angle de la caméra en degrés
+pub const CAMERA_ANGLE: f32 = 25.0;
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                      FICHIER: src/materials.rs                           ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+use bevy::prelude::*;
+
+/// Matériau 3D pour le cercle principal
+pub fn get_main_circle_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgb(0.8, 0.2, 0.1),
+        metallic: 0.3,
+        perceptual_roughness: 0.5,
+        ..default()
+    }
+}
+
+/// Matériau arc-en-ciel pour les triangles extérieurs
+pub fn get_rainbow_material(index: usize) -> StandardMaterial {
+    let hue = (index as f32 * 10.0) / 360.0 * 360.0;
+    StandardMaterial {
+        base_color: Color::hsl(hue, 0.8, 0.6),
+        metallic: 0.2,
+        perceptual_roughness: 0.6,
+        ..default()
+    }
+}
+
+/// Matériaux pour les triangles intérieurs
+pub fn get_interior_triangle_material(index: usize) -> StandardMaterial {
+    let colors = [
+        Color::srgb(0.2, 0.6, 0.9),
+        Color::srgb(0.9, 0.6, 0.2),
+        Color::srgb(0.2, 0.9, 0.6),
+        Color::srgb(0.9, 0.2, 0.6),
+        Color::srgb(0.6, 0.2, 0.9),
+    ];
+    StandardMaterial {
+        base_color: colors[index % colors.len()],
+        metallic: 0.3,
+        perceptual_roughness: 0.5,
+        ..default()
+    }
+}
+
+/// Matériau pour les petits cercles
+pub fn get_small_circle_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgba(1.0, 1.0, 1.0, 0.9),
+        metallic: 0.4,
+        perceptual_roughness: 0.3,
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    }
+}
+
+/// Matériau pour le logo R
+pub fn get_r_logo_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgb(1.0, 0.5, 0.0),
+        metallic: 0.5,
+        perceptual_roughness: 0.4,
+        ..default()
+    }
+}
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                      FICHIER: src/geometry.rs                            ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
+use std::f32::consts::PI;
+
+/// Convertit degrés en radians
+pub fn degrees_to_radians(degrees: f32) -> f32 {
+    degrees * PI / 180.0
+}
+
+/// Crée un anneau 3D avec épaisseur
+pub fn create_3d_ring_mesh(
+    outer_radius: f32,
+    inner_radius: f32,
+    depth: f32,
+    segments: usize,
+) -> Mesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+
+    // Pour chaque segment
+    for i in 0..=segments {
+        let angle = 2.0 * PI * i as f32 / segments as f32;
+        let cos = angle.cos();
+        let sin = angle.sin();
+
+        // Face avant (z = depth/2)
+        positions.push([outer_radius * cos, outer_radius * sin, depth / 2.0]);
+        normals.push([0.0, 0.0, 1.0]);
+        
+        positions.push([inner_radius * cos, inner_radius * sin, depth / 2.0]);
+        normals.push([0.0, 0.0, 1.0]);
+
+        // Face arrière (z = -depth/2)
+        positions.push([outer_radius * cos, outer_radius * sin, -depth / 2.0]);
+        normals.push([0.0, 0.0, -1.0]);
+        
+        positions.push([inner_radius * cos, inner_radius * sin, -depth / 2.0]);
+        normals.push([0.0, 0.0, -1.0]);
+    }
+
+    // Indices pour les faces avant et arrière
+    for i in 0..segments {
+        let base = i * 4;
+        
+        // Face avant
+        indices.extend_from_slice(&[
+            base, base + 1, base + 4,
+            base + 4, base + 1, base + 5,
+        ]);
+        
+        // Face arrière
+        indices.extend_from_slice(&[
+            base + 2, base + 6, base + 3,
+            base + 3, base + 6, base + 7,
+        ]);
+        
+        // Bord extérieur
+        indices.extend_from_slice(&[
+            base, base + 4, base + 2,
+            base + 2, base + 4, base + 6,
+        ]);
+        
+        // Bord intérieur
+        indices.extend_from_slice(&[
+            base + 1, base + 3, base + 5,
+            base + 5, base + 3, base + 7,
+        ]);
+    }
+
+    Mesh::new(PrimitiveTopology::TriangleList, Default::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Crée un cylindre 3D (cercle avec épaisseur)
+pub fn create_3d_cylinder_mesh(radius: f32, depth: f32, segments: usize) -> Mesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+
+    // Centre face avant
+    positions.push([0.0, 0.0, depth / 2.0]);
+    normals.push([0.0, 0.0, 1.0]);
+
+    // Centre face arrière
+    positions.push([0.0, 0.0, -depth / 2.0]);
+    normals.push([0.0, 0.0, -1.0]);
+
+    // Points du contour (avant et arrière)
+    for i in 0..=segments {
+        let angle = 2.0 * PI * i as f32 / segments as f32;
+        let x = radius * angle.cos();
+        let y = radius * angle.sin();
+
+        // Face avant
+        positions.push([x, y, depth / 2.0]);
+        normals.push([0.0, 0.0, 1.0]);
+
+        // Face arrière
+        positions.push([x, y, -depth / 2.0]);
+        normals.push([0.0, 0.0, -1.0]);
+    }
+
+    // Triangles face avant
+    for i in 0..segments {
+        let front_idx = 2 + i * 2;
+        indices.extend_from_slice(&[0, front_idx, front_idx + 2]);
+    }
+
+    // Triangles face arrière
+    for i in 0..segments {
+        let back_idx = 3 + i * 2;
+        indices.extend_from_slice(&[1, back_idx + 2, back_idx]);
+    }
+
+    // Bords latéraux
+    for i in 0..segments {
+        let front = 2 + i * 2;
+        let back = 3 + i * 2;
+        indices.extend_from_slice(&[
+            front, front + 2, back,
+            back, front + 2, back + 2,
+        ]);
+    }
+
+    Mesh::new(PrimitiveTopology::TriangleList, Default::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Crée un prisme triangulaire 3D
+pub fn create_3d_triangle_mesh(p1: Vec2, p2: Vec2, p3: Vec2, depth: f32) -> Mesh {
+    let half_depth = depth / 2.0;
+
+    let positions = vec![
+        // Face avant
+        [p1.x, p1.y, half_depth],
+        [p2.x, p2.y, half_depth],
+        [p3.x, p3.y, half_depth],
+        // Face arrière
+        [p1.x, p1.y, -half_depth],
+        [p2.x, p2.y, -half_depth],
+        [p3.x, p3.y, -half_depth],
+    ];
+
+    let indices = vec![
+        // Face avant
+        0, 1, 2,
+        // Face arrière
+        3, 5, 4,
+        // Côté 1
+        0, 3, 1, 1, 3, 4,
+        // Côté 2
+        1, 4, 2, 2, 4, 5,
+        // Côté 3
+        2, 5, 0, 0, 5, 3,
+    ];
+
+    // Calcul des normales
+    let normal_front = [0.0, 0.0, 1.0];
+    let normal_back = [0.0, 0.0, -1.0];
+
+    let normals = vec![
+        normal_front, normal_front, normal_front,
+        normal_back, normal_back, normal_back,
+    ];
+
+    Mesh::new(PrimitiveTopology::TriangleList, Default::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Crée un polygone extrudé en 3D
+pub fn create_3d_polygon_mesh(points: &[Vec2], depth: f32) -> Mesh {
+    if points.len() < 3 {
+        panic!("Besoin de minimum 3 points");
+    }
+
+    let half_depth = depth / 2.0;
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+
+    // Vertices face avant
+    for point in points {
+        positions.push([point.x, point.y, half_depth]);
+        normals.push([0.0, 0.0, 1.0]);
+    }
+
+    // Vertices face arrière
+    for point in points {
+        positions.push([point.x, point.y, -half_depth]);
+        normals.push([0.0, 0.0, -1.0]);
+    }
+
+    let n = points.len() as u32;
+
+    // Triangulation face avant
+    for i in 1..(n - 1) {
+        indices.extend_from_slice(&[0, i, i + 1]);
+    }
+
+    // Triangulation face arrière
+    for i in 1..(n - 1) {
+        indices.extend_from_slice(&[n, n + i + 1, n + i]);
+    }
+
+    // Bords latéraux
+    for i in 0..n {
+        let next = (i + 1) % n;
+        indices.extend_from_slice(&[
+            i, next, i + n,
+            i + n, next, next + n,
+        ]);
+    }
+
+    Mesh::new(PrimitiveTopology::TriangleList, Default::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Calcule les points d'un triangle extérieur
+pub fn calculate_exterior_triangle_points(
+    base_angle: f32,
+    circle_radius: f32,
+    triangle_side: f32,
+) -> (Vec2, Vec2, Vec2) {
+    let half_side = triangle_side / 2.0;
+    let height = triangle_side * (3.0_f32.sqrt() / 2.0);
+    
+    let angle1 = base_angle - (half_side / circle_radius);
+    let angle2 = base_angle + (half_side / circle_radius);
+    
+    let p1 = Vec2::new(circle_radius * angle1.cos(), circle_radius * angle1.sin());
+    let p2 = Vec2::new(circle_radius * angle2.cos(), circle_radius * angle2.sin());
+    let p3 = Vec2::new(
+        (circle_radius + height) * base_angle.cos(),
+        (circle_radius + height) * base_angle.sin(),
+    );
+    
+    (p1, p2, p3)
+}
+
+/// Calcule les points d'un triangle intérieur
+pub fn calculate_interior_triangle_points(
+    base_angle: f32,
+    inner_radius: f32,
+    triangle_side: f32,
+) -> (Vec2, Vec2, Vec2) {
+    let half_side = triangle_side / 2.0;
+    let height = triangle_side * (3.0_f32.sqrt() / 2.0);
+    
+    let angle1 = base_angle - (half_side / inner_radius);
+    let angle2 = base_angle + (half_side / inner_radius);
+    
+    let p1 = Vec2::new(inner_radius * angle1.cos(), inner_radius * angle1.sin());
+    let p2 = Vec2::new(inner_radius * angle2.cos(), inner_radius * angle2.sin());
+    let p3 = Vec2::new(
+        (inner_radius - height) * base_angle.cos(),
+        (inner_radius - height) * base_angle.sin(),
+    );
+    
+    (p1, p2, p3)
+}
+
+/// Calcule le centroïde d'un triangle
+pub fn calculate_triangle_centroid(p1: Vec2, p2: Vec2, p3: Vec2) -> Vec2 {
+    Vec2::new(
+        (p1.x + p2.x + p3.x) / 3.0,
+        (p1.y + p2.y + p3.y) / 3.0,
+    )
+}
+
+/// Définition d'une partie du logo R
+#[derive(Clone)]
+pub struct RPartDefinition {
+    pub name: &'static str,
+    pub points: Vec<Vec2>,
+}
+
+/// Retourne toutes les parties du logo R
+pub fn get_all_r_parts() -> Vec<RPartDefinition> {
+    vec![
+        RPartDefinition {
+            name: "Haut du R",
+            points: vec![
+                Vec2::new(-140.0, 90.0),
+                Vec2::new(60.0, 90.0),
+                Vec2::new(60.0, 50.0),
+                Vec2::new(-100.0, 50.0),
+            ],
+        },
+        RPartDefinition {
+            name: "Gauche du R",
+            points: vec![
+                Vec2::new(-80.0, 50.0),
+                Vec2::new(-30.0, 50.0),
+                Vec2::new(-30.0, -50.0),
+                Vec2::new(-80.0, -50.0),
+            ],
+        },
+        RPartDefinition {
+            name: "Arrondi du R",
+            points: vec![
+                Vec2::new(60.0, 90.0),
+                Vec2::new(85.0, 60.0),
+                Vec2::new(100.0, 30.0),
+                Vec2::new(85.0, 0.0),
+                Vec2::new(60.0, -30.0),
+            ],
+        },
+        RPartDefinition {
+            name: "Centre du R",
+            points: vec![
+                Vec2::new(60.0, 50.0),
+                Vec2::new(40.0, 50.0),
+                Vec2::new(60.0, 10.0),
+                Vec2::new(40.0, 10.0),
+            ],
+        },
+        RPartDefinition {
+            name: "Pied gauche du R",
+            points: vec![
+                Vec2::new(-80.0, -50.0),
+                Vec2::new(-10.0, -50.0),
+                Vec2::new(-10.0, -80.0),
+                Vec2::new(-140.0, -80.0),
+                Vec2::new(-160.0, -50.0),
+            ],
+        },
+        RPartDefinition {
+            name: "Milieu du R",
+            points: vec![
+                Vec2::new(60.0, -30.0),
+                Vec2::new(60.0, 10.0),
+                Vec2::new(-30.0, 10.0),
+                Vec2::new(-30.0, -30.0),
+            ],
+        },
+        RPartDefinition {
+            name: "Jambe droite du R",
+            points: vec![
+                Vec2::new(60.0, -30.0),
+                Vec2::new(20.0, -30.0),
+                Vec2::new(60.0, -50.0),
+                Vec2::new(100.0, -50.0),
+            ],
+        },
+        RPartDefinition {
+            name: "Pied droit du R",
+            points: vec![
+                Vec2::new(160.0, -50.0),
+                Vec2::new(30.0, -50.0),
+                Vec2::new(30.0, -80.0),
+                Vec2::new(120.0, -80.0),
+            ],
+        },
+    ]
+}
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                    FICHIER: src/systems/mod.rs                           ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+pub mod setup;
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                   FICHIER: src/systems/setup.rs                          ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+use bevy::prelude::*;
+use crate::{config, materials, geometry};
+
+pub fn setup_system(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    // Caméra 3D
+    let camera_angle_rad = geometry::degrees_to_radians(config::CAMERA_ANGLE);
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(
+            0.0,
+            -config::CAMERA_DISTANCE * camera_angle_rad.sin(),
+            config::CAMERA_DISTANCE * camera_angle_rad.cos(),
+        )
+        .looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+
+    // Lumières
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 10000.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+
+    commands.spawn((
+        PointLight {
+            intensity: 500000.0,
+            range: 1000.0,
+            ..default()
+        },
+        Transform::from_xyz(0.0, 200.0, 200.0),
+    ));
+
+    // Éléments
+    create_main_circle(&mut commands, &mut meshes, &mut materials);
+    create_exterior_triangles(&mut commands, &mut meshes, &mut materials);
+    create_interior_triangles(&mut commands, &mut meshes, &mut materials);
+    create_r_logo(&mut commands, &mut meshes, &mut materials);
+
+    print_creation_summary();
+}
+
+fn create_main_circle(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+) {
+    let mesh = geometry::create_3d_ring_mesh(
+        config::CIRCLE_RADIUS,
+        config::CIRCLE_RADIUS - config::CIRCLE_THICKNESS,
+        config::DEPTH,
+        config::CIRCLE_SEGMENTS,
+    );
+
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(materials::get_main_circle_material())),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
+}
+
+fn create_exterior_triangles(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+) {
+    for i in 0..config::EXTERIOR_TRIANGLES_COUNT {
+        let base_angle = geometry::degrees_to_radians((i as f32) * 10.0);
+        let (p1, p2, p3) = geometry::calculate_exterior_triangle_points(
+            base_angle,
+            config::CIRCLE_RADIUS,
+            config::SMALL_TRIANGLE_SIDE,
+        );
+
+        let mesh = geometry::create_3d_triangle_mesh(p1, p2, p3, config::DEPTH);
+
+        commands.spawn((
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(materials.add(materials::get_rainbow_material(i))),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+        ));
+    }
+}
+
+fn create_interior_triangles(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+) {
+    for i in 0..config::INTERIOR_TRIANGLES_COUNT {
+        let base_angle = geometry::degrees_to_radians((i as f32) * 72.0 + 90.0);
+        let inner_radius = config::CIRCLE_RADIUS - config::CIRCLE_THICKNESS;
+
+        let (p1, p2, p3) = geometry::calculate_interior_triangle_points(
+            base_angle,
+            inner_radius,
+            config::LARGE_TRIANGLE_SIDE,
+        );
+
+        let triangle_center = geometry::calculate_triangle_centroid(p1, p2, p3);
+
+        // Triangle
+        let triangle_mesh = geometry::create_3d_triangle_mesh(p1, p2, p3, config::DEPTH);
+        commands.spawn((
+            Mesh3d(meshes.add(triangle_mesh)),
+            MeshMaterial3d(materials.add(materials::get_interior_triangle_material(i))),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+        ));
+
+        // Petit cercle
+        let circle_mesh = geometry::create_3d_cylinder_mesh(
+            config::SMALL_CIRCLE_RADIUS,
+            config::DEPTH,
+            config::SMALL_CIRCLE_SEGMENTS,
+        );
+        commands.spawn((
+            Mesh3d(meshes.add(circle_mesh)),
+            MeshMaterial3d(materials.add(materials::get_small_circle_material())),
+            Transform::from_xyz(triangle_center.x, triangle_center.y, config::DEPTH / 2.0),
+        ));
+    }
+}
+
+fn create_r_logo(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+) {
+    let r_material = materials.add(materials::get_r_logo_material());
+
+    for part in geometry::get_all_r_parts() {
+        if part.points.len() < 3 {
+            continue;
+        }
+
+        let mesh = geometry::create_3d_polygon_mesh(&part.points, config::DEPTH);
+        commands.spawn((
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(r_material.clone()),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+        ));
+
+        println!("   {} créé avec {} points", part.name, part.points.len());
+    }
+}
+
+fn print_creation_summary() {
+    println!("\n=== LOGO 3D CRÉÉ ===");
+    println!("Épaisseur: {} unités", config::DEPTH);
+    println!("Caméra à {} unités", config::CAMERA_DISTANCE);
+    println!("====================\n");
+}
